@@ -1,1 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="미니 브롤">
+  <title>아이폰 미니 브롤</title>
+  <style>
+    * { box-sizing: border-box; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #2C3E50; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px; }
+    #top-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; color: white; font-weight: 800; font-size: 20px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
+    #ult-btn {
+      position: absolute; right: 30px; bottom: 130px; width: 70px; height: 70px; border-radius: 50%;
+      background: #555; border: 4px solid #888; color: white; font-weight: 900; font-size: 14px;
+      display: flex; align-items: center; justify-content: center; pointer-events: auto; opacity: 0.5; transition: 0.2s;
+    }
+    #ult-btn.ready { background: radial-gradient(circle, #FFD60A, #FF9F0A); border-color: #FFF; opacity: 1; box-shadow: 0 0 20px #FFD60A; color: #000; transform: scale(1.08); }
+    #start-screen { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; pointer-events: auto; background: rgba(0,0,0,0.75); padding: 30px; border-radius: 24px; width: 85%; max-width: 360px; }
+    button.play-btn { background: #FFD60A; color: #000; border: none; padding: 15px 40px; font-size: 20px; font-weight: 900; border-radius: 16px; margin-top: 15px; box-shadow: 0 4px 0 #CC9900; }
+    button.play-btn:active { transform: translateY(3px); box-shadow: none; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas"></canvas>
+  <div id="ui">
+    <div id="top-bar">
+      <div id="kills">처치: 0</div>
+      <div id="hp-text">HP: 100</div>
+    </div>
+    <div id="ult-btn" onclick="useUlt()">궁극기</div>
+  </div>
+  <div id="start-screen">
+    <h1 id="title" style="margin:0 0 10px; color:#FFD60A; font-size:32px;">MINI BRAWL</h1>
+    <p id="desc" style="color:#E5E5EA; font-size:15px; line-height:1.5; margin:0;">
+      <b>왼쪽 화면 드래그:</b> 이동<br>
+      <b>오른쪽 화면 터치/드래그:</b> 사격<br>
+      적 처치 시 궁극기 게이지 충전!
+    </p>
+    <button class="play-btn" onclick="startGame()">전투 시작</button>
+  </div>
 
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const killsEl = document.getElementById('kills');
+    const hpEl = document.getElementById('hp-text');
+    const ultBtn = document.getElementById('ult-btn');
+    const startScreen = document.getElementById('start-screen');
+
+    let w, h, playing = false, kills = 0, animId;
+    function resize() { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; }
+    window.addEventListener('resize', resize); resize();
+
+    // 플레이어 상태
+    const p = { x: 0, y: 0, r: 22, speed: 4.2, hp: 100, maxHp: 100, ammo: 3, maxAmmo: 3, reloadTimer: 0, ult: 0, lastHit: 0, angle: 0 };
+    let bullets = [], enemyBullets = [], enemies = [], walls = [], particles = [];
+    let moveTouch = { id: null, sx: 0, sy: 0, cx: 0, cy: 0 };
+    let aimTouch = { id: null, sx: 0, sy: 0, cx: 0, cy: 0 };
+
+    function initMap() {
+      walls = [
+        { x: w * 0.2, y: h * 0.25, w: 60, h: 60 },
+        { x: w * 0.8 - 60, y: h * 0.25, w: 60, h: 60 },
+        { x: w * 0.2, y: h * 0.7 - 60, w: 60, h: 60 },
+        { x: w * 0.8 - 60, y: h * 0.7 - 60, w: 60, h: 60 },
+        { x: w * 0.5 - 40, y: h * 0.5 - 20, w: 80, h: 40 }
+      ];
+    }
+
+    // 멀티터치 (왼쪽: 이동 조이스틱 / 오른쪽: 조준 및 발사)
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      for (let t of e.changedTouches) {
+        if (t.clientX < w / 2 && moveTouch.id === null) {
+          moveTouch = { id: t.identifier, sx: t.clientX, sy: t.clientY, cx: t.clientX, cy: t.clientY };
+        } else if (t.clientX >= w / 2 && aimTouch.id === null) {
+          aimTouch = { id: t.identifier, sx: t.clientX, sy: t.clientY, cx: t.clientX, cy: t.clientY };
+        }
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      for (let t of e.changedTouches) {
+        if (t.identifier === moveTouch.id) { moveTouch.cx = t.clientX; moveTouch.cy = t.clientY; }
+        if (t.identifier === aimTouch.id) { aimTouch.cx = t.clientX; aimTouch.cy = t.clientY; }
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+      for (let t of e.changedTouches) {
+        if (t.identifier === moveTouch.id) moveTouch.id = null;
+        if (t.identifier === aimTouch.id) {
+          if (playing) shoot();
+          aimTouch.id = null;
+        }
+      }
+    });
+
+    function shoot() {
+      if (p.ammo < 1) return;
+      p.ammo--;
+      let ang = p.angle;
+      const dx = aimTouch.cx - aimTouch.sx, dy = aimTouch.cy - aimTouch.sy;
+      if (Math.hypot(dx, dy) > 10) ang = Math.atan2(dy, dx);
+      else if (enemies.length > 0) {
+        // 탭만 했을 때 가장 가까운 적 자동 조준 (오토에임)
+        let nearest = enemies.reduce((a, b) => Math.hypot(p.x - a.x, p.y - a.y) < Math.hypot(p.x - b.x, p.y - b.y) ? a : b);
+        ang = Math.atan2(nearest.y - p.y, nearest.x - p.x);
+      }
+      p.angle = ang;
+      bullets.push({ x: p.x, y: p.y, vx: Math.cos(ang) * 11, vy: Math.sin(ang) * 11, r: 7, dmg: 35, life: 45 });
+    }
+
+    function useUlt() {
+      if (!playing || p.ult < 100) return;
+      p.ult = 0;
+      ultBtn.classList.remove('ready');
+      for (let i = 0; i < 16; i++) {
+        const ang = (Math.PI * 2 / 16) * i;
+        bullets.push({ x: p.x, y: p.y, vx: Math.cos(ang) * 12, vy: Math.sin(ang) * 12, r: 10, dmg: 60, life: 50, isUlt: true });
+      }
+    }
+
+    function checkWall(nx, ny, r) {
+      for (let wl of walls) {
+        if (nx + r > wl.x && nx - r < wl.x + wl.w && ny + r > wl.y && ny - r < wl.y + wl.h) return true;
+      }
+      return false;
+    }
+
+    function spawnEnemy() {
+      const side = Math.floor(Math.random() * 4);
+      let ex = side === 0 ? 20 : side === 1 ? w - 20 : Math.random() * w;
+      let ey = side === 2 ? 20 : side === 3 ? h - 20 : Math.random() * h;
+      enemies.push({ x: ex, y: ey, r: 20, hp: 100, maxHp: 100, speed: 2.1 + Math.min(1.5, kills * 0.05), cd: 60 });
+    }
+
+    function startGame() {
+      playing = true; kills = 0;
+      p.x = w / 2; p.y = h * 0.8; p.hp = 100; p.ammo = 3; p.ult = 0;
+      bullets = []; enemyBullets = []; enemies = []; particles = [];
+      ultBtn.classList.remove('ready');
+      killsEl.innerText = '처치: 0';
+      initMap();
+      for (let i = 0; i < 3; i++) spawnEnemy();
+      startScreen.style.display = 'none';
+      loop();
+    }
+
+    function gameOver() {
+      playing = false; cancelAnimationFrame(animId);
+      document.getElementById('title').innerText = '전투 패배!';
+      document.getElementById('desc').innerHTML = `총 처치한 적: <b>${kills}명</b>`;
+      startScreen.style.display = 'block';
+    }
+
+    function loop() {
+      if (!playing) return;
+      ctx.fillStyle = '#3B6E51'; // 브롤 아레나 잔디 배경
+      ctx.fillRect(0, 0, w, h);
+
+      // 격자 무늬
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      for (let x = 0; x < w; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      for (let y = 0; y < h; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+      // 벽 그리기
+      ctx.fillStyle = '#8D6E63';
+      for (let wl of walls) {
+        ctx.fillRect(wl.x, wl.y, wl.w, wl.h);
+        ctx.strokeStyle = '#5D4037'; ctx.lineWidth = 3; ctx.strokeRect(wl.x, wl.y, wl.w, wl.h);
+      }
+
+      // 탄창 충전 & 자연 체력 회복
+      if (p.ammo < p.maxAmmo) {
+        p.reloadTimer++;
+        if (p.reloadTimer > 55) { p.ammo++; p.reloadTimer = 0; }
+      }
+      if (Date.now() - p.lastHit > 3000 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 0.15);
+      hpEl.innerText = `HP: ${Math.ceil(p.hp)}`;
+
+      // 플레이어 이동
+      if (moveTouch.id !== null) {
+        const dx = moveTouch.cx - moveTouch.sx, dy = moveTouch.cy - moveTouch.sy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 5) {
+          const ang = Math.atan2(dy, dx);
+          p.angle = ang;
+          const nx = Math.max(p.r, Math.min(w - p.r, p.x + Math.cos(ang) * p.speed));
+          const ny = Math.max(p.r, Math.min(h - p.r, p.y + Math.sin(ang) * p.speed));
+          if (!checkWall(nx, p.y, p.r)) p.x = nx;
+          if (!checkWall(p.x, ny, p.r)) p.y = ny;
+        }
+      }
+
+      // 조준선 표시
+      if (aimTouch.id !== null) {
+        const dx = aimTouch.cx - aimTouch.sx, dy = aimTouch.cy - aimTouch.sy;
+        const ang = Math.hypot(dx, dy) > 10 ? Math.atan2(dy, dx) : p.angle;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)'; ctx.lineWidth = 14;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + Math.cos(ang) * 180, p.y + Math.sin(ang) * 180); ctx.stroke();
+      }
+
+      // 플레이어 그리기
+      ctx.fillStyle = '#0A84FF'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 3; ctx.stroke();
+
+      // 머리 위 체력바 & 탄창(주황색 3칸)
+      ctx.fillStyle = '#000'; ctx.fillRect(p.x - 24, p.y - 38, 48, 7);
+      ctx.fillStyle = '#30D158'; ctx.fillRect(p.x - 24, p.y - 38, 48 * (p.hp / p.maxHp), 7);
+      for (let i = 0; i < 3; i++) {
+        ctx.fillStyle = i < Math.floor(p.ammo) ? '#FF9F0A' : 'rgba(0,0,0,0.5)';
+        ctx.fillRect(p.x - 24 + i * 16.5, p.y - 29, 15, 5);
+      }
+
+      // 플레이어 총알
