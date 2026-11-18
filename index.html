@@ -9,9 +9,9 @@
   <title>아이폰 미니 브롤</title>
   <style>
     * { box-sizing: border-box; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-    body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #2C3E50; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #2C3E50; font-family: -apple-system, BlinkMacSystemFont, sans-serif; touch-action: none; }
     canvas { display: block; width: 100%; height: 100%; }
-    #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px; }
+    #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: env(safe-area-inset-top) 20px env(safe-area-inset-bottom) 20px; z-index: 10; }
     #top-bar { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; color: white; font-weight: 800; font-size: 20px; text-shadow: 0 2px 4px rgba(0,0,0,0.5); }
     #ult-btn {
       position: absolute; right: 30px; bottom: 130px; width: 70px; height: 70px; border-radius: 50%;
@@ -19,8 +19,14 @@
       display: flex; align-items: center; justify-content: center; pointer-events: auto; opacity: 0.5; transition: 0.2s;
     }
     #ult-btn.ready { background: radial-gradient(circle, #FFD60A, #FF9F0A); border-color: #FFF; opacity: 1; box-shadow: 0 0 20px #FFD60A; color: #000; transform: scale(1.08); }
-    #start-screen { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; pointer-events: auto; background: rgba(0,0,0,0.75); padding: 30px; border-radius: 24px; width: 85%; max-width: 360px; }
-    button.play-btn { background: #FFD60A; color: #000; border: none; padding: 15px 40px; font-size: 20px; font-weight: 900; border-radius: 16px; margin-top: 15px; box-shadow: 0 4px 0 #CC9900; }
+    #start-screen {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white;
+      pointer-events: auto; background: rgba(0,0,0,0.82); padding: 30px; border-radius: 24px; width: 85%; max-width: 360px; z-index: 20;
+    }
+    button.play-btn {
+      background: #FFD60A; color: #000; border: none; padding: 16px 40px; font-size: 20px; font-weight: 900;
+      border-radius: 16px; margin-top: 20px; box-shadow: 0 4px 0 #CC9900; cursor: pointer; width: 100%;
+    }
     button.play-btn:active { transform: translateY(3px); box-shadow: none; }
   </style>
 </head>
@@ -31,7 +37,7 @@
       <div id="kills">처치: 0</div>
       <div id="hp-text">HP: 100</div>
     </div>
-    <div id="ult-btn" onclick="useUlt()">궁극기</div>
+    <div id="ult-btn">궁극기</div>
   </div>
   <div id="start-screen">
     <h1 id="title" style="margin:0 0 10px; color:#FFD60A; font-size:32px;">MINI BRAWL</h1>
@@ -40,7 +46,7 @@
       <b>오른쪽 화면 터치/드래그:</b> 사격<br>
       적 처치 시 궁극기 게이지 충전!
     </p>
-    <button class="play-btn" onclick="startGame()">전투 시작</button>
+    <button id="start-btn" class="play-btn">전투 시작</button>
   </div>
 
   <script>
@@ -50,16 +56,31 @@
     const hpEl = document.getElementById('hp-text');
     const ultBtn = document.getElementById('ult-btn');
     const startScreen = document.getElementById('start-screen');
+    const startBtn = document.getElementById('start-btn');
 
     let w, h, playing = false, kills = 0, animId;
     function resize() { w = canvas.width = window.innerWidth; h = canvas.height = window.innerHeight; }
     window.addEventListener('resize', resize); resize();
 
-    // 플레이어 상태
     const p = { x: 0, y: 0, r: 22, speed: 4.2, hp: 100, maxHp: 100, ammo: 3, maxAmmo: 3, reloadTimer: 0, ult: 0, lastHit: 0, angle: 0 };
-    let bullets = [], enemyBullets = [], enemies = [], walls = [], particles = [];
+    let bullets = [], enemyBullets = [], enemies = [], walls = [];
     let moveTouch = { id: null, sx: 0, sy: 0, cx: 0, cy: 0 };
     let aimTouch = { id: null, sx: 0, sy: 0, cx: 0, cy: 0 };
+
+    // 시작 버튼 & 궁극기 버튼 아이폰 터치 즉시 반응 연결
+    function handleStart(e) {
+      if (e) e.preventDefault();
+      if (!playing) startGame();
+    }
+    startBtn.addEventListener('touchstart', handleStart, { passive: false });
+    startBtn.addEventListener('click', handleStart);
+
+    function handleUlt(e) {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      useUlt();
+    }
+    ultBtn.addEventListener('touchstart', handleUlt, { passive: false });
+    ultBtn.addEventListener('click', handleUlt);
 
     function initMap() {
       walls = [
@@ -71,7 +92,6 @@
       ];
     }
 
-    // 멀티터치 (왼쪽: 이동 조이스틱 / 오른쪽: 조준 및 발사)
     canvas.addEventListener('touchstart', (e) => {
       e.preventDefault();
       for (let t of e.changedTouches) {
@@ -108,7 +128,6 @@
       const dx = aimTouch.cx - aimTouch.sx, dy = aimTouch.cy - aimTouch.sy;
       if (Math.hypot(dx, dy) > 10) ang = Math.atan2(dy, dx);
       else if (enemies.length > 0) {
-        // 탭만 했을 때 가장 가까운 적 자동 조준 (오토에임)
         let nearest = enemies.reduce((a, b) => Math.hypot(p.x - a.x, p.y - a.y) < Math.hypot(p.x - b.x, p.y - b.y) ? a : b);
         ang = Math.atan2(nearest.y - p.y, nearest.x - p.x);
       }
@@ -143,7 +162,8 @@
     function startGame() {
       playing = true; kills = 0;
       p.x = w / 2; p.y = h * 0.8; p.hp = 100; p.ammo = 3; p.ult = 0;
-      bullets = []; enemyBullets = []; enemies = []; particles = [];
+      bullets = []; enemyBullets = []; enemies = [];
+      moveTouch.id = null; aimTouch.id = null;
       ultBtn.classList.remove('ready');
       killsEl.innerText = '처치: 0';
       initMap();
@@ -161,22 +181,19 @@
 
     function loop() {
       if (!playing) return;
-      ctx.fillStyle = '#3B6E51'; // 브롤 아레나 잔디 배경
+      ctx.fillStyle = '#3B6E51';
       ctx.fillRect(0, 0, w, h);
 
-      // 격자 무늬
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       for (let x = 0; x < w; x += 50) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
       for (let y = 0; y < h; y += 50) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
 
-      // 벽 그리기
       ctx.fillStyle = '#8D6E63';
       for (let wl of walls) {
         ctx.fillRect(wl.x, wl.y, wl.w, wl.h);
         ctx.strokeStyle = '#5D4037'; ctx.lineWidth = 3; ctx.strokeRect(wl.x, wl.y, wl.w, wl.h);
       }
 
-      // 탄창 충전 & 자연 체력 회복
       if (p.ammo < p.maxAmmo) {
         p.reloadTimer++;
         if (p.reloadTimer > 55) { p.ammo++; p.reloadTimer = 0; }
@@ -184,7 +201,6 @@
       if (Date.now() - p.lastHit > 3000 && p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + 0.15);
       hpEl.innerText = `HP: ${Math.ceil(p.hp)}`;
 
-      // 플레이어 이동
       if (moveTouch.id !== null) {
         const dx = moveTouch.cx - moveTouch.sx, dy = moveTouch.cy - moveTouch.sy;
         const dist = Math.hypot(dx, dy);
@@ -198,7 +214,6 @@
         }
       }
 
-      // 조준선 표시
       if (aimTouch.id !== null) {
         const dx = aimTouch.cx - aimTouch.sx, dy = aimTouch.cy - aimTouch.sy;
         const ang = Math.hypot(dx, dy) > 10 ? Math.atan2(dy, dx) : p.angle;
@@ -206,16 +221,4 @@
         ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + Math.cos(ang) * 180, p.y + Math.sin(ang) * 180); ctx.stroke();
       }
 
-      // 플레이어 그리기
       ctx.fillStyle = '#0A84FF'; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'white'; ctx.lineWidth = 3; ctx.stroke();
-
-      // 머리 위 체력바 & 탄창(주황색 3칸)
-      ctx.fillStyle = '#000'; ctx.fillRect(p.x - 24, p.y - 38, 48, 7);
-      ctx.fillStyle = '#30D158'; ctx.fillRect(p.x - 24, p.y - 38, 48 * (p.hp / p.maxHp), 7);
-      for (let i = 0; i < 3; i++) {
-        ctx.fillStyle = i < Math.floor(p.ammo) ? '#FF9F0A' : 'rgba(0,0,0,0.5)';
-        ctx.fillRect(p.x - 24 + i * 16.5, p.y - 29, 15, 5);
-      }
-
-      // 플레이어 총알
